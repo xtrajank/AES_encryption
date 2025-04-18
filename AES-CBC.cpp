@@ -12,6 +12,9 @@ XORs with previous block and key to encrypt files - text or binary.
 #include <random>
 #include <cstring>
 #include <iomanip>
+#include <algorithm>
+#include <cctype>
+#include <filesystem>
 
 #define BLOCK_SIZE 16
 
@@ -94,9 +97,9 @@ size_t removePKCS7Padding (unsigned char* data, size_t total_size, size_t block_
     return total_size - pad_value;
 }
 
-unsigned char* convertFileToUnsignedChar (const char* input, size_t& out_size) {
+unsigned char* convertFileToUnsignedChar (const std::string& input, size_t& out_size) {
     // read file
-    std::fstream file(input, std::ios::in | std::ios::binary | std::ios::ate);
+    std::ifstream file(input, std::ios::binary | std::ios::ate);
 
     if(!file) {
         std::cerr << "Error opening file: " << input << std::endl;
@@ -194,59 +197,135 @@ void printDecrypted(std::ostream& os, unsigned char* data, size_t size) {
     os << std::flush; 
 }
 
+// make input lowercase
+std::string toLower(const std::string& input) {
+    std::string result = input;
+    std::transform(result.begin(), result.end(), result.begin(), [](unsigned char c) {return std::tolower(c);});
+    return result;
+}
+
 int main (int argc, char *argv[]) {
-    if (argc < 2) {
-        std::cerr << "Missing file input." << std::endl;
-        return -1;
+    // start interface
+    // title
+    std::cout << std::setfill(' ') << std::setw(37) << "AES-CBC Encryption Software" << std::endl << std::setfill('-') << std::setw(50) << "" << std::endl << std::endl;
+
+    // options
+    for (;;) {
+        std::cout << "What would you like to do:" << std::endl;
+
+        std::cout << "1 - Encrypt a file" << std::endl;
+        std::cout << "2 - Decrypt a file" << std::endl;
+        std::cout << "0 - Exit" << std::endl;
+        
+        std::string user_choice;
+        std::cin >> user_choice;
+
+        if (user_choice == "0" || toLower(user_choice) == "exit") {
+            return 0;
+        } else if (user_choice == "1" || toLower(user_choice) == "encrypt") {
+            // get password
+            std::string password;
+            std::cout << "Enter password: ";
+            std::cin >> password;
+
+            // convert password
+            unsigned char key[BLOCK_SIZE] = {};
+            std::memcpy(key, password.c_str(), std::min(password.size(), static_cast<size_t>(BLOCK_SIZE)));
+
+            // initialization vector
+            unsigned char* initialization_vector = randomInitBlock(BLOCK_SIZE);
+            std::cout << "Keep this IV Key for decryption: " << initialization_vector << std::endl;
+
+            // get file
+            std::string input_file;
+            std::cout << "Enter file: ";
+            std::cin >> input_file;
+
+            // convert the input_file into a path
+            std::filesystem::path input_path(input_file);
+
+            // get data from file
+            size_t data_size = 0;
+            unsigned char* data = convertFileToUnsignedChar(input_file, data_size);
+
+            // make data blocks
+            std::vector<unsigned char*> blocks;
+            blocks = makeBlocks(data, data_size, BLOCK_SIZE);
+
+            // encrypt data
+            size_t file_size = blocks.size() * BLOCK_SIZE;
+            unsigned char* encrypted_data = encryptData(blocks, key, initialization_vector, BLOCK_SIZE);
+
+            // output to file
+            std::string output_filename = input_path.stem().string() + "_encrypted.txt";
+
+            std::ofstream output_file(output_filename);
+            
+            if (output_file) {
+                output_file.write(reinterpret_cast<char*>(encrypted_data), data_size);
+                // output encrypted file name
+                std::cout << "Encryption finished. Stored in: " << output_filename << std::endl << std::endl;
+            } else {
+                std::cerr << "Failed to open file for writing: " << output_filename << std::endl;
+            }
+
+            // cleanup
+            delete[] encrypted_data;
+            delete[] initialization_vector;
+            deallocateBlocks(blocks);
+        } else if (user_choice == "2" || toLower(user_choice) == "decrypt") {
+            // get file
+            std::string encrypted_filename;
+            std::cout << "Enter file: ";
+            std::cin >> encrypted_filename;
+
+            std::filesystem::path encrypted_filepath(encrypted_filename);
+
+            // convert file to unsigned char
+            size_t data_size = 0;
+            unsigned char* encrypted_data = convertFileToUnsignedChar(encrypted_filename, data_size);
+
+            // get password
+            std::string password;
+            std::cout << "Enter password: ";
+            std::cin >> password;
+
+            // convert password
+            unsigned char key[BLOCK_SIZE] = {};
+            std::memcpy(key, password.c_str(), std::min(password.size(), static_cast<size_t>(BLOCK_SIZE)));
+
+            // get initialization vector
+            std::string iv_input;
+            std::cout << "Enter IV Key: ";
+            std::cin >> iv_input;
+
+            //convert initialization vector
+            unsigned char initialization_vector[BLOCK_SIZE] = {};
+            std::memcpy(initialization_vector, iv_input.c_str(), std::min(iv_input.size(), static_cast<size_t>(BLOCK_SIZE)));
+
+            // decrypt data
+            size_t decrypted_size = 0;
+            unsigned char* decrypted_data = decryptData(encrypted_data, data_size, initialization_vector, key, decrypted_size, BLOCK_SIZE);
+
+            // output to file
+            std::string output_filename = encrypted_filepath.stem().string() + "_decrypted.txt";
+
+            std::ofstream output_file(output_filename);
+            
+            if (output_file) {
+                printDecrypted(output_file, decrypted_data, decrypted_size);
+                // output encrypted file name
+                std::cout << "Decryption finished. Stored in: " << output_filename << std::endl << std::endl;
+            } else {
+                std::cerr << "Failed to open file for writing: " << output_filename << std::endl;
+            }
+
+            // cleanup
+            delete[] encrypted_data;
+            delete[] decrypted_data;
+        } else {
+            std::cout << user_choice << " is not an option." << std::endl;
+        }
     }
-
-    // get password
-    std::string password;
-    std::cout << "Enter password: ";
-    std::cin >> password;
-
-    // convert password
-    unsigned char key[BLOCK_SIZE] = {};
-    std::memcpy(key, password.c_str(), std::min(password.size(), static_cast<size_t>(BLOCK_SIZE)));
-
-    unsigned char* initialization_vector = randomInitBlock(BLOCK_SIZE);
-
-    // make file data
-    size_t data_size = 0;
-    unsigned char* data = convertFileToUnsignedChar(argv[1], data_size);
-
-    // print data befor decryption
-    std::cout << "Orignal Data:" << std::endl;
-    printOriginal(std::cout, data, data_size);
-    std::cout << std::endl << std::endl;
-
-    // make data blocks
-    std::vector<unsigned char*> blocks;
-    blocks = makeBlocks(data, data_size, BLOCK_SIZE);
-
-    // encrypt data
-    size_t file_size = blocks.size() * BLOCK_SIZE;
-    unsigned char* encrypted_data = encryptData(blocks, key, initialization_vector, BLOCK_SIZE);
-
-    //print the data encrypted as hex
-    std::cout << "Encrypted Data:" << std::endl;
-    printHex(std::cout, encrypted_data, file_size);
-    std::cout << std::endl;
-
-    // decrypt data
-    size_t decrypted_size = 0;
-    unsigned char* decrypted_data = decryptData(encrypted_data, data_size, initialization_vector, key, decrypted_size, BLOCK_SIZE);
-
-    // print decrypted data
-    std::cout << "Decrypted Data:" << std::endl;
-    printDecrypted(std::cout, decrypted_data, decrypted_size);
-    std::cout << std::endl;
-
-    // cleanup
-    delete[] encrypted_data;
-    delete[] initialization_vector;
-    delete[] decrypted_data;
-    deallocateBlocks(blocks);
-
     return 0;
 }
